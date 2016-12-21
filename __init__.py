@@ -1,0 +1,1 @@
+from assemblyline.al.service.beaver.beaver import Beaver
