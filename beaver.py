@@ -3,7 +3,7 @@
 from assemblyline.common.context import Context
 from assemblyline.al.common.result import Result, ResultSection, SCORE, Classification, Tag, TAG_TYPE, TAG_WEIGHT
 from assemblyline.al.common.av_result import VirusHitTag
-from assemblyline.al.datasource.beaver import Beaver as BeaverDatasource, Name
+from al_services.alsvc_beaver.datasource.beaver import Beaver as BeaverDatasource, Name
 from assemblyline.al.service.base import ServiceBase, Category
 
 
