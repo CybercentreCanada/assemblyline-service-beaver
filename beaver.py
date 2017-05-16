@@ -38,10 +38,11 @@ class Beaver(ServiceBase):
     def __init__(self, cfg=None):
         super(Beaver, self).__init__(cfg)
         self.direct_db = 'db' in cfg and 'port' in cfg
-        self._connect_params = None
+        self._connect_params = {}
         self.api_url = None
         self.auth = None
         self.session = None
+        self.connection = None
 
     def start(self):
         self._connect_params = {
@@ -59,15 +60,12 @@ class Beaver(ServiceBase):
             self.auth = (self.cfg.get('user'), self.cfg.get('passwd'))
             self.session = None
 
-        self.connection = None
+        self.connection = BeaverDatasource(self.log, **self._connect_params)
 
     # noinspection PyUnresolvedReferences
     def import_service_deps(self):
         global BeaverDatasource
         from al_services.alsvc_beaver.datasource.beaver import Beaver as BeaverDatasource
-
-    def start(self):
-        self.connection = BeaverDatasource(self.log, **self._connect_params)
 
     @staticmethod
     def lookup_callouts(response):
