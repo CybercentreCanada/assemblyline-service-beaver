@@ -1,10 +1,10 @@
 from assemblyline.al.common import forge
 from assemblyline.al.datasource.common import Datasource, DatasourceException
 
-Classification = forge.get_classification()
+import MySQLdb
+import MySQLdb.cursors
 
-Name = "CCIRC Malware Database"
-Unsupported = DatasourceException("%s API only supports MD5" % Name)
+Classification = forge.get_classification()
 
 callout_query = """\
 SELECT
@@ -84,6 +84,8 @@ GROUP BY e1.md5;
 
 
 class Beaver(Datasource):
+    Name = "CCIRC Malware Database"
+
     def __init__(self, log, **kw):
         super(Beaver, self).__init__(log, **kw)
         self.params = {
@@ -103,9 +105,6 @@ class Beaver(Datasource):
     # noinspection PyUnresolvedReferences
     def _query(self, sql, hash_type, value, fetchall=True):
         results = []
-
-        import MySQLdb
-        import MySQLdb.cursors
 
         with MySQLdb.connect(
             cursorclass=MySQLdb.cursors.DictCursor,
@@ -162,7 +161,7 @@ class Beaver(Datasource):
         return {
             "confirmed": malicious,
             "data": data,
-            "description": "File found in the %s." % Name,
+            "description": "File found in the %s." % self.Name,
             "malicious": malicious,
         }
 
@@ -182,13 +181,13 @@ class Beaver(Datasource):
         return {
             "confirmed": malicious,
             "data": data,
-            "description": "File found %s time(s) in the %s." % (count, Name),
+            "description": "File found %s time(s) in the %s." % (count, self.Name),
             "malicious": malicious,
         }
 
     def query_api(self, hash_type, value):
         if hash_type != "md5":
-            raise Unsupported
+            raise DatasourceException("%s API only supports MD5" % self.Name)
 
         if self.session is None:
             # noinspection PyUnresolvedReferences
