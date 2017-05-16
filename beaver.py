@@ -3,9 +3,9 @@
 from assemblyline.common.context import Context
 from assemblyline.al.common.result import Result, ResultSection, SCORE, Classification, Tag, TAG_TYPE, TAG_WEIGHT
 from assemblyline.al.common.av_result import VirusHitTag
-from al_services.alsvc_beaver.datasource.beaver import Beaver as BeaverDatasource, Name
 from assemblyline.al.service.base import ServiceBase, Category
 
+BeaverDatasource = None
 
 class AvHitSection(ResultSection):
     def __init__(self, av_name, virus_name, score):
@@ -20,7 +20,7 @@ class Beaver(ServiceBase):
     SERVICE_ACCEPTS = '.*'
     SERVICE_ENABLED = True
     SERVICE_CATEGORY = Category.STATIC_ANALYSIS
-    SERVICE_REVISION = ServiceBase.parse_revision('$Id: c16eeb0ba1c83a39cf83ddeffea5ed9194f9f6ea $')
+    SERVICE_REVISION = ServiceBase.parse_revision('$Id$')
     SERVICE_VERSION = '1'
     SERVICE_DEFAULT_CONFIG = {
         "host": "127.0.0.1",
@@ -30,13 +30,19 @@ class Beaver(ServiceBase):
         "db": "beaver",
         "direct_db": True
     }
-    SERVICE_DESCRIPTION = "Performs hash lookups against the %s." % Name
+    SERVICE_DESCRIPTION = "Performs hash lookups against the CCIRC Malware Database."
     SERVICE_CPU_CORES = 0.05
     SERVICE_CPU_RAM = 64
 
     def __init__(self, cfg=None):
         super(Beaver, self).__init__(cfg)
         self.direct_db = 'db' in cfg and 'port' in cfg
+        self._connect_params = None
+        self.api_url = None
+        self.auth = None
+        self.session = None
+
+    def start(self):
         self._connect_params = {
             'host': self.cfg.get('host'),
             'user': self.cfg.get('user'),
@@ -51,6 +57,11 @@ class Beaver(ServiceBase):
             self.api_url = "%s/al/report/%%s" % self.cfg.get('host')
             self.auth = (self.cfg.get('user'), self.cfg.get('passwd'))
             self.session = None
+
+    # noinspection PyUnresolvedReferences
+    def import_service_deps(self):
+        global BeaverDatasource
+        from al_services.alsvc_beaver.datasource.beaver import Beaver as BeaverDatasource
 
     def _connect(self):
         return BeaverDatasource(self.log, **self._connect_params)
