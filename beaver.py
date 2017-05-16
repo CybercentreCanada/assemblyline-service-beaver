@@ -4,6 +4,7 @@ from assemblyline.common.context import Context
 from assemblyline.al.common.result import Result, ResultSection, SCORE, Classification, Tag, TAG_TYPE, TAG_WEIGHT
 from assemblyline.al.common.av_result import VirusHitTag
 from assemblyline.al.service.base import ServiceBase, Category
+from assemblyline.common.exceptions import RecoverableError
 
 BeaverDatasource = None
 
@@ -58,13 +59,15 @@ class Beaver(ServiceBase):
             self.auth = (self.cfg.get('user'), self.cfg.get('passwd'))
             self.session = None
 
+        self.connection = None
+
     # noinspection PyUnresolvedReferences
     def import_service_deps(self):
         global BeaverDatasource
         from al_services.alsvc_beaver.datasource.beaver import Beaver as BeaverDatasource
 
-    def _connect(self):
-        return BeaverDatasource(self.log, **self._connect_params)
+    def start(self):
+        self.connection = BeaverDatasource(self.log, **self._connect_params)
 
     @staticmethod
     def lookup_callouts(response):
@@ -296,10 +299,11 @@ class Beaver(ServiceBase):
         return result
 
     def execute(self, request):
-        connection = self._connect()
-
-        response = connection.query(request.md5)
-        if connection.direct_db:
+        try:
+            response = self.connection.query(request.md5)
+        except BeaverDatasource.DatabaseException:
+            raise RecoverableError("Query failed")
+        if self.connection.direct_db:
             request.result = self.parse_direct_db(response)
         else:
             request.result = self.parse_api(response)

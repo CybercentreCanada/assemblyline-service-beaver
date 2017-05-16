@@ -3,6 +3,7 @@ from assemblyline.al.datasource.common import Datasource, DatasourceException
 
 import MySQLdb
 import MySQLdb.cursors
+import traceback
 
 Classification = forge.get_classification()
 
@@ -84,6 +85,8 @@ GROUP BY e1.md5;
 
 
 class Beaver(Datasource):
+    class DatabaseException(Exception):
+        pass
     Name = "CCIRC Malware Database"
 
     def __init__(self, log, **kw):
@@ -102,14 +105,29 @@ class Beaver(Datasource):
         else:
             self.api_url = "%s/al/report/%%s" % kw['host']
 
+        self.connection = None
+
+    def connect(self):
+        try:
+            self.connection = MySQLdb.connect(
+                cursorclass=MySQLdb.cursors.DictCursor,
+                connect_timeout=10,
+                **self.params
+            )
+        except MySQLdb.Error:
+            self.connection = None
+            self.log.warn("Could not connect to database: %s" % traceback.format_exc())
+            raise self.DatabaseException()
+
     # noinspection PyUnresolvedReferences
     def _query(self, sql, hash_type, value, fetchall=True):
         results = []
 
-        with MySQLdb.connect(
-            cursorclass=MySQLdb.cursors.DictCursor,
-            **self.params
-        ) as cursor:
+        if self.connection is None:
+            self.connect()
+        cursor = None
+        try:
+            cursor = self.connection.cursor()
             cursor.execute(sql.format(field=hash_type, value=value))
             if fetchall:
                 results = cursor.fetchall()
@@ -117,6 +135,21 @@ class Beaver(Datasource):
                 result = cursor.fetchone()
                 if result:
                     results = [result]
+            cursor.close()
+            cursor = None
+        except MySQLdb.Error:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except MySQLdb.Error:
+                    pass
+            try:
+                self.connection.close()
+            except MySQLdb.Error:
+                pass
+            self.connection = None
+            self.log.warn("Could not query database: %s" % traceback.format_exc())
+            raise self.DatabaseException()
 
         return results
 
@@ -161,7 +194,7 @@ class Beaver(Datasource):
         return {
             "confirmed": malicious,
             "data": data,
-            "description": "File found in the %s." % self.Name,
+            "description": "File found in the %s." % Beaver.Name,
             "malicious": malicious,
         }
 
@@ -181,7 +214,7 @@ class Beaver(Datasource):
         return {
             "confirmed": malicious,
             "data": data,
-            "description": "File found %s time(s) in the %s." % (count, self.Name),
+            "description": "File found %s time(s) in the %s." % (count, Beaver.Name),
             "malicious": malicious,
         }
 
