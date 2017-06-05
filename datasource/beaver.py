@@ -4,6 +4,7 @@ from assemblyline.al.datasource.common import Datasource, DatasourceException
 import MySQLdb
 import MySQLdb.cursors
 import traceback
+import threading
 
 Classification = forge.get_classification()
 
@@ -105,17 +106,18 @@ class Beaver(Datasource):
         else:
             self.api_url = "%s/al/report/%%s" % kw['host']
 
-        self.connection = None
+        self.tls = threading.local()
+        self.tls.connection = None
 
     def connect(self):
         try:
-            self.connection = MySQLdb.connect(
+            self.tls.connection = MySQLdb.connect(
                 cursorclass=MySQLdb.cursors.DictCursor,
                 connect_timeout=10,
                 **self.params
             )
         except MySQLdb.Error:
-            self.connection = None
+            self.tls.connection = None
             self.log.warn("Could not connect to database: %s" % traceback.format_exc())
             raise self.DatabaseException()
 
@@ -123,11 +125,11 @@ class Beaver(Datasource):
     def _query(self, sql, hash_type, value, fetchall=True):
         results = []
 
-        if self.connection is None:
+        if self.tls.connection is None:
             self.connect()
         cursor = None
         try:
-            cursor = self.connection.cursor()
+            cursor = self.tls.connection.cursor()
             cursor.execute(sql.format(field=hash_type, value=value))
             if fetchall:
                 results = cursor.fetchall()
@@ -141,13 +143,13 @@ class Beaver(Datasource):
             if cursor is not None:
                 try:
                     cursor.close()
-                except MySQLdb.Error:
+                except ProgrammingError:
                     pass
             try:
-                self.connection.close()
+                self.tls.connection.close()
             except MySQLdb.Error:
                 pass
-            self.connection = None
+            self.tls.connection = None
             self.log.warn("Could not query database: %s" % traceback.format_exc())
             raise self.DatabaseException()
 
