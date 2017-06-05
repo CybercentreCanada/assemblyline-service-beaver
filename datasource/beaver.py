@@ -120,10 +120,16 @@ class Beaver(Datasource):
             self.tls.connection = None
             self.log.warn("Could not connect to database: %s" % traceback.format_exc())
             raise self.DatabaseException()
+        except AttributeError:
+            self.tls.connection = None
+            raise self.DatabaseException("TLS not initialized")
 
     # noinspection PyUnresolvedReferences
     def _query(self, sql, hash_type, value, fetchall=True):
         results = []
+
+        if not hasattr(self.tls, "connection"):
+            self.tls.connection = None
 
         if self.tls.connection is None:
             self.connect()
@@ -143,7 +149,7 @@ class Beaver(Datasource):
             if cursor is not None:
                 try:
                     cursor.close()
-                except ProgrammingError:
+                except MySQLdb.ProgrammingError:
                     pass
             try:
                 self.tls.connection.close()
