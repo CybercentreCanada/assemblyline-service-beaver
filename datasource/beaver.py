@@ -143,7 +143,7 @@ class Beaver(Datasource):
             if cursor is not None:
                 try:
                     cursor.close()
-                except ProgrammingError:
+                except MySQLdb.ProgrammingError:
                     pass
             try:
                 self.tls.connection.close()
