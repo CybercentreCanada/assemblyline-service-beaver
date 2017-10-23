@@ -8,6 +8,7 @@ from assemblyline.common.exceptions import RecoverableError
 
 BeaverDatasource = None
 
+
 class AvHitSection(ResultSection):
     def __init__(self, av_name, virus_name, score):
         title = '%s identified the file as %s' % (av_name, virus_name)
@@ -28,8 +29,7 @@ class Beaver(ServiceBase):
         "user": "user",
         "passwd": "password",
         "port": 3306,
-        "db": "beaver",
-        "direct_db": True
+        "db": "beaver"
     }
     SERVICE_DESCRIPTION = "Performs hash lookups against the CCIRC Malware Database."
     SERVICE_CPU_CORES = 0.05
@@ -37,28 +37,24 @@ class Beaver(ServiceBase):
 
     def __init__(self, cfg=None):
         super(Beaver, self).__init__(cfg)
-        self.direct_db = 'db' in cfg and 'port' in cfg
+        self.direct_db = 'x-api-key' not in cfg
         self._connect_params = {}
         self.api_url = None
-        self.auth = None
-        self.session = None
         self.connection = None
 
     def start(self):
         self._connect_params = {
-            'host': self.cfg.get('host'),
-            'user': self.cfg.get('user'),
-            'passwd': self.cfg.get('passwd')
+            'host': self.cfg.get('host')
         }
         if self.direct_db:
             self._connect_params.update({
                 'port': int(self.cfg.get('port')),
-                'db': self.cfg.get('db')
+                'db': self.cfg.get('db'),
+                'user': self.cfg.get('user'),
+                'passwd': self.cfg.get('passwd')
             })
         else:
-            self.api_url = "%s/al/report/%%s" % self.cfg.get('host')
-            self.auth = (self.cfg.get('user'), self.cfg.get('passwd'))
-            self.session = None
+            self._connect_params.update({"x-api-key": self.cfg.get('x-api-key')})
 
         self.connection = BeaverDatasource(self.log, **self._connect_params)
 
@@ -211,21 +207,22 @@ class Beaver(ServiceBase):
         result = Result()
 
         # Info block
-        hash_info = data.get('hash_info')
+        hash_info = data.get('hashinfo', {})
         if not hash_info:
             return result
         r_info = ResultSection(title_text='File Info')
         r_info.score = SCORE.NULL
-        r_info.add_line('Received Data: %s-%s-%s' % (data['received_date'][:4],
-                                                     data['received_date'][4:6],
-                                                     data['received_date'][6:]))
+        if 'receivedDate' in data.get('metadata'):
+            r_info.add_line('Received Data: %s-%s-%s' % (data['metadata']['receivedDate'][:4],
+                                                         data['metadata']['receivedDate'][4:6],
+                                                         data['metadata']['receivedDate'][6:]))
         r_info.add_line('Size: %s' % hash_info.get('filesize', ""))
         r_info.add_line('MD5: %s' % hash_info.get('md5', ""))
         r_info.add_line('SHA1: %s' % hash_info.get('sha1', ""))
         r_info.add_line('SHA256: %s' % hash_info.get('sha256', ""))
         r_info.add_line('SSDeep Blocksize: %s' % hash_info.get('ssdeep_blocksize', ""))
         r_info.add_line('SSDeep Hash1: %s' % hash_info.get('ssdeep_hash1', ""))
-        r_info.add_line('SSDeep Hash2: %s' % hash_info.get('ssdeep_hash1', ""))
+        r_info.add_line('SSDeep Hash2: %s' % hash_info.get('ssdeep_hash2', ""))
         result.add_result(r_info)
 
         callouts = data.get('callouts', [])
@@ -237,13 +234,15 @@ class Beaver(ServiceBase):
             r_call_sub_section = None
 
             reported_count = 0
+            server = ''
             for callout in callouts:
                 reported_count += 1
                 if reported_count <= max_callouts:
-                    if analyser != callout['ip']:
-                        title = '%s (Analysed on %s)' % (callout['ip'], callout['addedDate'])
+                    ip = callout.get('ip', callout.get('hostIp', ''))
+                    if analyser != ip:
+                        title = '%s (Analysed on %s)' % (ip, callout.get('addedOn', {}).get('data', 'Unknown date'))
                         r_call_sub_section = ResultSection(title_text=title, parent=r_callouts)
-                        analyser = callout['ip']
+                        analyser = ip
 
                     channel = callout['channel']
                     if channel is not None:
@@ -251,15 +250,16 @@ class Beaver(ServiceBase):
                     else:
                         channel = ""
 
-                    r_call_sub_section.add_line("{0:s}:{1:d}{2:s}".format(callout['callout'], callout['port'], channel))
+                    server = callout.get('server', ip)
+                    r_call_sub_section.add_line("{0:s}:{1:d}{2:s}".format(server, callout['port'], channel))
 
                 try:
-                    p1, p2, p3, p4 = callout['callout'].split(".")
+                    p1, p2, p3, p4 = server.split(".")
                     if int(p1) <= 255 and int(p2) <= 255 and int(p3) <= 255 and int(p4) <= 255:
                         result.append_tag(
-                            Tag(TAG_TYPE.NET_IP, callout['callout'], TAG_WEIGHT.MED, context=Context.BEACONS))
+                            Tag(TAG_TYPE.NET_IP, server, TAG_WEIGHT.MED, context=Context.BEACONS))
                 except ValueError:
-                    result.append_tag(Tag(TAG_TYPE.NET_DOMAIN_NAME, callout['callout'], TAG_WEIGHT.MED,
+                    result.append_tag(Tag(TAG_TYPE.NET_DOMAIN_NAME, server, TAG_WEIGHT.MED,
                                           context=Context.BEACONS))
 
                 if callout['port'] != 0:
@@ -270,22 +270,7 @@ class Beaver(ServiceBase):
                 r_callouts.add_line("And %s more..." % str(len(callouts) - 10))
             result.add_result(r_callouts)
 
-        spamcount = data.get('spamCount', {})
-        if spamcount:
-            r_spam = ResultSection(title_text='SPAM feed')
-            r_spam.score = SCORE.VHIGH
-            r_spam.add_line('Found %d related spam emails' % spamcount['count'])
-            email_sample = spamcount.get("email_sample", {})
-            r_spam.add_line('\tFirst Seen: %s' % email_sample['firstSeen'])
-            r_spam.add_line('\tLast Seen: %s' % email_sample['lastSeen'])
-            r_sub_section = ResultSection(title_text='Attachments', parent=r_spam)
-            if email_sample['filename']:
-                r_sub_section.add_line('%s - md5: %s' % (email_sample['filename'], email_sample['filenameMD5']))
-            if email_sample['attachment']:
-                r_sub_section.add_line('%s - md5: %s' % (email_sample['attachment'], email_sample['attachmentMD5']))
-            result.add_result(r_spam)
-
-        av_results = data.get('av_results', [])
+        av_results = data.get('av', [])
         if len(av_results) > 0:
             r_av_sec = ResultSection(title_text='Anti-Virus Detections')
             r_av_sec.add_line('Found %d AV hit(s).' % len(av_results))
