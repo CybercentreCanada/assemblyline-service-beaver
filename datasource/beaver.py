@@ -93,7 +93,7 @@ class Beaver(Datasource):
     def __init__(self, log, **kw):
         super(Beaver, self).__init__(log, **kw)
         self.params = {
-            k: kw[k] for k in ('host', 'passwd', 'user')
+            k: kw[k] for k in ('host',)
         }
 
         self.api_url = None
@@ -102,9 +102,10 @@ class Beaver(Datasource):
 
         if 'db' in kw and 'port' in kw:
             self.direct_db = True
-            self.params.update({k: kw[k] for k in ('db', 'port')})
+            self.params.update({k: kw[k] for k in ('db', 'port', 'passwd', 'user')})
         else:
-            self.api_url = "%s/al/report/%%s" % kw['host']
+            self.api_url = "%s/1.0/%%s/%%s/report" % kw['host']
+            self.xapikey = kw['x-api-key']
 
         self.tls = threading.local()
         self.tls.connection = None
@@ -177,27 +178,32 @@ class Beaver(Datasource):
         if not results:
             return []
 
-        malicious = any(results.get(x, None) for x in (
-            'av_results', 'callouts', 'spamCount',
-        ))
+        hash_info = results.get('hashinfo', {})
+        if not hash_info:
+            return []
 
-        rdate = results['received_date']
+        rdate = results.get('metadata', {}).get('receivedDate')
 
-        first_seen = "%s-%s-%sT00:00:00Z" % (
-            rdate[:4], rdate[4:6], rdate[6:]
-        )
-
-        hash_info = results['hash_info']
+        if rdate:
+            first_seen = "%s-%s-%sT00:00:00Z" % (
+                rdate[:4], rdate[4:6], rdate[6:]
+            )
+        else:
+            first_seen = "1970-01-01T00:00:00Z"
 
         data = {
             "first_seen": first_seen,
-            "last_seen": first_seen,  # No last_seen is provided.
+            "last_seen": first_seen,  # No last_seen is
             "md5": hash_info.get('md5', ""),
             "sha1": hash_info.get('sha1', ""),
             "sha256": hash_info.get('sha256', ""),
             "size": hash_info.get('filesize', ""),
+            "raw": results
         }
-        data.update(results)
+
+        malicious = any(results.get(x, None) for x in (
+            'av'
+        ))
 
         return {
             "confirmed": malicious,
@@ -227,29 +233,26 @@ class Beaver(Datasource):
         }
 
     def query_api(self, hash_type, value):
-        if hash_type != "md5":
-            raise DatasourceException("%s API only supports MD5" % self.Name)
-
         if self.session is None:
             # noinspection PyUnresolvedReferences
             import requests
             self.session = requests.Session()
 
         response = self.session.get(
-            self.api_url % value,
-            auth=(self.params['user'], self.params['passwd'])
+            self.api_url % (hash_type, value),
+            headers={'X-API-Key': self.xapikey}
         )
 
         # noinspection PyBroadException
         try:
             response.raise_for_status()  # Raise exception when status_code != 200.
-        except:
+        except Exception:
             error = response.json()
-            error_code = error.get('error_code', str(response.status_code))
-            if int(error_code) == 105:  # File not found error code
+            error_code = response.status_code
+            if error_code in (204, 404):  # No data for file or file not found
                 return {}
             else:
-                raise Exception("[%s] %s" % (error_code, error.get("error_message", "Unknown error")))
+                raise Exception("[%s] %s" % (error_code, error.get("error", "Unknown error")))
 
         return response.json()
 
