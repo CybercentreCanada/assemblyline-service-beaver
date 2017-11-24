@@ -29,7 +29,8 @@ class Beaver(ServiceBase):
         "user": "user",
         "passwd": "password",
         "port": 3306,
-        "db": "beaver"
+        "db": "beaver",
+        "x-api-key": None
     }
     SERVICE_DESCRIPTION = "Performs hash lookups against the CCIRC Malware Database."
     SERVICE_CPU_CORES = 0.05
