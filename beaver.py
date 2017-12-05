@@ -38,7 +38,7 @@ class Beaver(ServiceBase):
 
     def __init__(self, cfg=None):
         super(Beaver, self).__init__(cfg)
-        self.direct_db = cfg.get('x-api-key', None) is not None
+        self.direct_db = cfg.get('x-api-key', None) is None
         self._connect_params = {}
         self.api_url = None
         self.connection = None
