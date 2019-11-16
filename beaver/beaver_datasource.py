@@ -115,7 +115,7 @@ class Beaver:
             self.direct_db = True
             self.params.update({k: kw[k] for k in ('db', 'port', 'passwd', 'user')})
         else:
-            self.api_url = f"{kw['host']}/1.0/%%s/%%s/report"
+            self.api_url = f"{kw['host']}/1.0/%s/%s/report"
             self.xapikey = kw['x-api-key']
 
         self.tls = threading.local()
