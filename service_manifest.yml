@@ -1,0 +1,56 @@
+name: Beaver
+version: 1
+description: Performs hash lookups against the CCIRC Malware Database.
+
+accepts: .*
+rejects: empty|metadata/.*
+
+stage: CORE
+category: Static Analysis
+
+file_required: true
+timeout: 60
+disable_cache: false
+
+enabled: false
+is_external: false
+licence_count: 0
+
+config:
+  host: 127.0.0.1
+  user: user
+  passwd: password
+  port: 3306
+  db: beaver
+  x_api_key: null
+
+
+heuristics:
+  - heur_id: 1
+    name: Upatre Activity
+    score: 500
+    filetype: '*'
+    description: Upatre activity
+
+  - heur_id: 2
+    name: Related Spam Emails Found
+    score: 100
+    filetype: '*'
+    description: Found related spam emails
+
+  - heur_id: 3
+    name: Anti-virus Detection
+    score: 1000
+    filetype: '*'
+    description: Anti-virus detection
+
+  - heur_id: 4
+    name: Sandbox Call-Outs
+    score: 100
+    filetype: '*'
+    description: Sandbox call-outs
+
+docker_config:
+  image: cccs/assemblyline-service-beaver:latest
+  cpu_cores: 0.5
+  ram_mb: 64

@@ -1,12 +1,13 @@
-from assemblyline.al.common import forge
-from assemblyline.al.datasource.common import Datasource, DatasourceException
-
-import MySQLdb
-import MySQLdb.cursors
-import traceback
+import re
 import threading
+import traceback
 
-Classification = forge.get_classification()
+import mysql.connector
+import requests
+
+HASH_RE = r'^[0-9a-fA-F]{32,64}$'
+HASH_PATTERN = re.compile(HASH_RE)
+
 
 callout_query = """\
 SELECT
@@ -85,13 +86,23 @@ GROUP BY e1.md5;
 """
 
 
-class Beaver(Datasource):
+def _hash_type(value):
+    if HASH_PATTERN.match(value):
+        return {
+            32: "md5", 40: "sha1", 64: "sha256"
+        }.get(len(value), "invalid")
+    else:
+        return "invalid"
+
+
+class Beaver:
     class DatabaseException(Exception):
         pass
+
     Name = "CCIRC Malware Database"
 
     def __init__(self, log, **kw):
-        super(Beaver, self).__init__(log, **kw)
+        self.log = log
         self.params = {
             k: kw[k] for k in ('host',)
         }
@@ -104,7 +115,7 @@ class Beaver(Datasource):
             self.direct_db = True
             self.params.update({k: kw[k] for k in ('db', 'port', 'passwd', 'user')})
         else:
-            self.api_url = "%s/1.0/%%s/%%s/report" % kw['host']
+            self.api_url = f"{kw['host']}/1.0/%s/%s/report"
             self.xapikey = kw['x-api-key']
 
         self.tls = threading.local()
@@ -112,14 +123,13 @@ class Beaver(Datasource):
 
     def connect(self):
         try:
-            self.tls.connection = MySQLdb.connect(
-                cursorclass=MySQLdb.cursors.DictCursor,
+            self.tls.connection = mysql.connector.connect(
                 connect_timeout=10,
                 **self.params
             )
-        except MySQLdb.Error:
+        except mysql.connector.Error:
             self.tls.connection = None
-            self.log.warn("Could not connect to database: %s" % traceback.format_exc())
+            self.log.warning(f"Could not connect to database: {traceback.format_exc()}")
             raise self.DatabaseException()
         except AttributeError:
             self.tls.connection = None
@@ -136,7 +146,7 @@ class Beaver(Datasource):
             self.connect()
         cursor = None
         try:
-            cursor = self.tls.connection.cursor()
+            cursor = self.tls.connection.cursor(dictionary=True)
             cursor.execute(sql.format(field=hash_type, value=value))
             if fetchall:
                 results = cursor.fetchall()
@@ -157,12 +167,12 @@ class Beaver(Datasource):
             except MySQLdb.Error:
                 pass
             self.tls.connection = None
-            self.log.warn("Could not query database: %s" % traceback.format_exc())
+            self.log.warning(f"Could not query database: {traceback.format_exc()}")
             raise self.DatabaseException()
 
         return results
 
-    def parse(self, results, **kw):
+    def parse(self, results):
         if self.direct_db:
             item = self.parse_db(results)
         else:
@@ -185,9 +195,7 @@ class Beaver(Datasource):
         rdate = results.get('metadata', {}).get('receivedDate')
 
         if rdate:
-            first_seen = "%s-%s-%sT00:00:00Z" % (
-                rdate[:4], rdate[4:6], rdate[6:]
-            )
+            first_seen = f"{rdate[:4]}-{rdate[4:6]}-{rdate[6:]}T00:00:00Z"
         else:
             first_seen = "1970-01-01T00:00:00Z"
 
@@ -208,7 +216,7 @@ class Beaver(Datasource):
         return {
             "confirmed": malicious,
             "data": data,
-            "description": "File found in the %s." % Beaver.Name,
+            "description": f"File found in the {Beaver.Name}.",
             "malicious": malicious,
         }
 
@@ -228,14 +236,14 @@ class Beaver(Datasource):
         return {
             "confirmed": malicious,
             "data": data,
-            "description": "File found %s time(s) in the %s." % (count, Beaver.Name),
+            "description": f"File found {count} time(s) in the {Beaver.Name}.",
             "malicious": malicious,
         }
 
     def query_api(self, hash_type, value):
         if self.session is None:
             # noinspection PyUnresolvedReferences
-            import requests
+
             self.session = requests.Session()
 
         response = self.session.get(
@@ -252,7 +260,7 @@ class Beaver(Datasource):
             if error_code in (204, 404):  # No data for file or file not found
                 return {}
             else:
-                raise Exception("[%s] %s" % (error_code, error.get("error", "Unknown error")))
+                raise Exception(f"[{error_code}] {error.get('error', 'Unknown error')}")
 
         return response.json()
 
@@ -273,7 +281,7 @@ class Beaver(Datasource):
         return results
 
     def query(self, value, **kw):
-        hash_type = self.hash_type(value)
+        hash_type = _hash_type(value)
         value = value.lower()
 
         if self.direct_db:
