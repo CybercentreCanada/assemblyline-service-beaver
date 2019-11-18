@@ -53,4 +53,4 @@ heuristics:
 docker_config:
   image: cccs/assemblyline-service-beaver:latest
   cpu_cores: 0.5
-  ram_mb: 64
+  ram_mb: 128
