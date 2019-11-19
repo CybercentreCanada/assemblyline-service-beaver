@@ -1,13 +1,9 @@
-import re
 import threading
 import traceback
 
 import mysql.connector
-import requests
 
-HASH_RE = r'^[0-9a-fA-F]{32,64}$'
-HASH_PATTERN = re.compile(HASH_RE)
-
+from assemblyline.datasource.common import Datasource
 
 callout_query = """\
 SELECT
@@ -86,23 +82,13 @@ GROUP BY e1.md5;
 """
 
 
-def _hash_type(value):
-    if HASH_PATTERN.match(value):
-        return {
-            32: "md5", 40: "sha1", 64: "sha256"
-        }.get(len(value), "invalid")
-    else:
-        return "invalid"
-
-
-class Beaver:
+class Beaver(Datasource):
     class DatabaseException(Exception):
         pass
-
     Name = "CCIRC Malware Database"
 
     def __init__(self, log, **kw):
-        self.log = log
+        super(Beaver, self).__init__(log, **kw)
         self.params = {
             k: kw[k] for k in ('host',)
         }
@@ -172,7 +158,7 @@ class Beaver:
 
         return results
 
-    def parse(self, results):
+    def parse(self, results, **kw):
         if self.direct_db:
             item = self.parse_db(results)
         else:
@@ -243,7 +229,7 @@ class Beaver:
     def query_api(self, hash_type, value):
         if self.session is None:
             # noinspection PyUnresolvedReferences
-
+            import requests
             self.session = requests.Session()
 
         response = self.session.get(
@@ -281,7 +267,7 @@ class Beaver:
         return results
 
     def query(self, value, **kw):
-        hash_type = _hash_type(value)
+        hash_type = self.hash_type(value)
         value = value.lower()
 
         if self.direct_db:
