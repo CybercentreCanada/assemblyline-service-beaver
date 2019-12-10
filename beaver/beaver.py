@@ -64,9 +64,9 @@ class Beaver(ServiceBase):
             try:
                 p1, p2, p3, p4 = result['callout'].split(".")
                 if int(p1) <= 255 and int(p2) <= 255 and int(p3) <= 255 and int(p4) <= 255:
-                    r_sub_section.add_tag('network.ip', result['callout'])
+                    r_sub_section.add_tag('network.dynamic.ip', result['callout'])
             except ValueError:
-                r_sub_section.add_tag('network.domain', result['callout'])
+                r_sub_section.add_tag('network.dynamic.domain', result['callout'])
 
             if result['port'] != 0:
                 r_sub_section.add_tag('network.port', str(result['port']))
@@ -215,9 +215,9 @@ class Beaver(ServiceBase):
                 try:
                     p1, p2, p3, p4 = server.split(".")
                     if int(p1) <= 255 and int(p2) <= 255 and int(p3) <= 255 and int(p4) <= 255:
-                        r_call_sub_section.add_tag('network.ip', server)
+                        r_call_sub_section.add_tag('network.dynamic.ip', server)
                 except ValueError:
-                    r_call_sub_section.add_tag('network.domain', server)
+                    r_call_sub_section.add_tag('network.dynamic.domain', server)
 
                 if callout['port'] != 0:
                     r_call_sub_section.add_tag('network.port', str(callout['port']))
