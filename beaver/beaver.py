@@ -8,11 +8,19 @@ from beaver.beaver_datasource import Beaver as BeaverDatasource
 
 class AvHitSection(ResultSection):
     def __init__(self, av_name, virus_name):
-        title = f'{av_name} identified the file as {virus_name}'
+        title = f"{av_name} identified the file as {virus_name}"
+        json_body = dict(
+            av_name=av_name,
+            virus_name=virus_name,
+        )
+
         super(AvHitSection, self).__init__(
             title_text=title,
-            classification=Classification.UNRESTRICTED)
-        self.set_heuristic(3)
+            body_format=BODY_FORMAT.KEY_VALUE,
+            body=json.dumps(json_body),
+            classification=Classification.UNRESTRICTED,
+        )
+        self.set_heuristic(3, signature=f'{av_name}.{virus_name}')
         self.add_tag('av.virus_name', virus_name)
 
 
@@ -174,18 +182,26 @@ class Beaver(ServiceBase):
         hash_info = data.get('hashinfo', {})
         if not hash_info:
             return result
-        r_info = ResultSection(title_text='File Info')
+
+        json_body = dict()
         if 'receivedDate' in data.get('metadata'):
-            r_info.add_line(f"Received Data: {data['metadata']['receivedDate'][:4]}-"
-                            f"{data['metadata']['receivedDate'][4:6]}-{data['metadata']['receivedDate'][6:]}")
-        r_info.add_line(f"Size: {hash_info.get('filesize', '')}")
-        r_info.add_line(f"MD5: {hash_info.get('md5', '')}")
-        r_info.add_line(f"SHA1: {hash_info.get('sha1', '')}")
-        r_info.add_line(f"SHA256: {hash_info.get('sha256', '')}")
-        r_info.add_line(f"SSDeep Blocksize: {hash_info.get('ssdeep_blocksize', '')}")
-        r_info.add_line(f"SSDeep Hash1: {hash_info.get('ssdeep_hash1', '')}")
-        r_info.add_line(f"SSDeep Hash2: {hash_info.get('ssdeep_hash2', '')}")
-        result.add_section(r_info)
+            json_body.update(dict(
+                received_date=f"{data['metadata']['receivedDate'][:4]}-{data['metadata']['receivedDate'][4:6]}-"
+                              f"{data['metadata']['receivedDate'][6:]}"
+            ))
+
+        json_body.update(dict(
+            size=hash_info.get('filesize', ''),
+            md5=hash_info.get('md5', ''),
+            sha1=hash_info.get('sha1', ''),
+            sha256=hash_info.get('sha256', ''),
+            ssdeep_blocksize=hash_info.get('ssdeep_blocksize', ''),
+            ssdeep_hash1=hash_info.get('ssdeep_hash1', ''),
+            ssdeep_hash2=hash_info.get('ssdeep_hash2', ''),
+        ))
+
+        ResultSection(title_text='File Info', parent=result, body_format=BODY_FORMAT.KEY_VALUE,
+                      body=json.dumps(json_body))
 
         callouts = data.get('callouts', [])
         if len(callouts) > 0:
