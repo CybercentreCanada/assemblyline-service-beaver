@@ -51,6 +51,6 @@ heuristics:
     description: Sandbox call-outs
 
 docker_config:
-  image: cccs/assemblyline-service-beaver:latest
+  image: ${REGISTRY}cccs/assemblyline-service-beaver:latest
   cpu_cores: 0.5
   ram_mb: 128
