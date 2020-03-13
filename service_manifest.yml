@@ -39,10 +39,10 @@ heuristics:
     description: Found related spam emails
 
   - heur_id: 3
-    name: Anti-virus Detection
+    name: File is infected
     score: 1000
     filetype: '*'
-    description: Anti-virus detection
+    description: Anti-virus hit
 
   - heur_id: 4
     name: Sandbox Call-Outs
@@ -54,3 +54,4 @@ docker_config:
   image: ${REGISTRY}cccs/assemblyline-service-beaver:latest
   cpu_cores: 0.5
   ram_mb: 128
+
