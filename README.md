@@ -8,9 +8,6 @@ This service performs hash lookups against the CCIRC Malware Database.
 
 This service works by querying the CCIRC Malware database via API or with direct database access to see if the file that you are submitting has already been seen by the CCIRC Malware analysis team. It will then pull dynamic analysis information about the malware as well as AV results and domains.
 
-## Datasource
-
-Because this service only uses the hash to query for information, installing this service also enables it as a datasource in the hash_search API (`/api/v3/hash_search/<HASH>/`)
 
 ## Access to CCIRC Malware Database
 
