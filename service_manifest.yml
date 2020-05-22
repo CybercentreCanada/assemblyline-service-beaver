@@ -1,6 +1,6 @@
 name: Beaver
 version: 1
-description: Performs hash lookups against the CCIRC Malware Database.
+description: Performs hash lookups against the CCCS Malware Database.
 
 accepts: .*
 rejects: empty|metadata/.*
