@@ -6,7 +6,7 @@ This service performs hash lookups against the CCCS Malware Database.
 
 ## Access to CCCS Beaver Malware Database
 
-Required to be a CCCS partners, please contact contact@cyber.gc.ca to see if you are eligible.
+Requires to be a CCCS partners, please contact contact@cyber.gc.ca to see if you are eligible.
 
 ## Execution
 
