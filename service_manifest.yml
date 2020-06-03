@@ -1,5 +1,5 @@
 name: Beaver
-version: 1
+version: $SERVICE_TAG
 description: Performs hash lookups against the CCCS Malware Database.
 
 accepts: .*
@@ -51,7 +51,7 @@ heuristics:
     description: Sandbox call-outs
 
 docker_config:
-  image: ${REGISTRY}cccs/assemblyline-service-beaver:latest
+  image: ${REGISTRY}cccs/assemblyline-service-beaver:$SERVICE_TAG
   cpu_cores: 0.5
   ram_mb: 128
 
