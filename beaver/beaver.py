@@ -1,9 +1,12 @@
 import json
 
+from assemblyline.common import forge
 from assemblyline.common.exceptions import RecoverableError
 from assemblyline_v4_service.common.base import ServiceBase
-from assemblyline_v4_service.common.result import Result, ResultSection, Classification, BODY_FORMAT
+from assemblyline_v4_service.common.result import Result, ResultSection, BODY_FORMAT
 from beaver.beaver_datasource import Beaver as BeaverDatasource
+
+Classification = forge.get_classification()
 
 
 class AvHitSection(ResultSection):
