@@ -8,22 +8,18 @@ rejects: empty|metadata/.*
 stage: CORE
 category: Static Analysis
 
-file_required: true
+privileged: true
+file_required: false
 timeout: 60
 disable_cache: false
 
 enabled: false
-is_external: false
+is_external: true
 licence_count: 0
 
 config:
-  host: 127.0.0.1
-  user: user
-  passwd: password
-  port: 3306
-  db: beaver
-  x_api_key: null
-
+  base_url: "https://beaver"
+  headers: {}
 
 heuristics:
   - heur_id: 1
@@ -54,4 +50,3 @@ docker_config:
   image: ${REGISTRY}cccs/assemblyline-service-beaver:$SERVICE_TAG
   cpu_cores: 0.5
   ram_mb: 128
-
