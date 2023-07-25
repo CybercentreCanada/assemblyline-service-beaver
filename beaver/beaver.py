@@ -267,10 +267,6 @@ class Beaver(ServiceBase):
         urls = list(set(task_tags.get("network.static.uri", []) + task_tags.get("network.dynamic.uri", [])))
         ips = list(set(task_tags.get("network.static.ip", []) + task_tags.get("network.dynamic.ip", [])))
 
-        domains = ["canada.ca", "dpbqyqxynbip.ru"]
-        urls = ["https://qazaqtravel.kz/admin/login.php"]
-        ips = ["50.63.110.1"]
-
         if urls:
             url_section = ResultSection("Extracted URLs from Assemblyline", auto_collapse=True)
             for url in urls:
