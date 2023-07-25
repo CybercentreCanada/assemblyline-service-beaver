@@ -10,6 +10,7 @@ category: Static Analysis
 
 privileged: true
 file_required: false
+uses_tags: true
 timeout: 60
 disable_cache: false
 
@@ -20,19 +21,20 @@ licence_count: 0
 config:
   base_url: "https://beaver"
   headers: {}
+  rate_limit: 1
 
 heuristics:
-  - heur_id: 1
-    name: Upatre Activity
-    score: 500
-    filetype: '*'
-    description: Upatre activity
+  # - heur_id: 1
+  #   name: Upatre Activity
+  #   score: 500
+  #   filetype: '*'
+  #   description: Upatre activity
 
-  - heur_id: 2
-    name: Related Spam Emails Found
-    score: 100
-    filetype: '*'
-    description: Found related spam emails
+  # - heur_id: 2
+  #   name: Related Spam Emails Found
+  #   score: 100
+  #   filetype: '*'
+  #   description: Found related spam emails
 
   - heur_id: 3
     name: File is infected
