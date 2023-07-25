@@ -1,266 +1,297 @@
-import json
+import os
+import re
 
-from assemblyline.common import forge
-from assemblyline.common.exceptions import RecoverableError
-from assemblyline_v4_service.common.base import ServiceBase
-from assemblyline_v4_service.common.result import Result, ResultSection, BODY_FORMAT
-from beaver.beaver_datasource import Beaver as BeaverDatasource
+from assemblyline.odm.base import IP_ONLY_REGEX
+from assemblyline_v4_service.common.api import ServiceAPIError
+from assemblyline_v4_service.common.base import ServiceBase, ServiceRequest
+from assemblyline_v4_service.common.result import (
+    Result,
+    ResultKeyValueSection,
+    ResultTableSection,
+    ResultImageSection,
+    TableRow,
+    Heuristic,
+    ResultSection,
+)
+from hashlib import md5
+from requests import Session
+from tempfile import NamedTemporaryFile
+from time import sleep
+from datetime import datetime
+from base64 import b64encode
+from urllib.parse import urlparse
 
-Classification = forge.get_classification()
+
+def format_domain_resolution(ip_loc: dict):
+    ip = ip_loc.pop("ip")
+    location = {"IP": ip}
+    location.update(ip_loc)
+    return location
 
 
-class AvHitSection(ResultSection):
-    def __init__(self, av_name, virus_name):
-        title = f"{av_name} identified the file as {virus_name}"
-        json_body = dict(
-            av_name=av_name,
-            virus_name=virus_name,
-        )
+class BeaverSessionClient(Session):
+    def __init__(self, url_base, rate_limit) -> None:
+        super().__init__()
+        self.url_base = url_base + "/auth/api"
+        self.rate_limit = rate_limit
+        self.last_request = datetime.now()
 
-        super(AvHitSection, self).__init__(
-            title_text=title,
-            body_format=BODY_FORMAT.KEY_VALUE,
-            body=json.dumps(json_body),
-            classification=Classification.UNRESTRICTED,
-        )
-        self.set_heuristic(3, signature=f'{av_name}.{virus_name}')
-        self.add_tag('av.virus_name', virus_name)
+    def request(self, method, url, **kwargs):
+        url = self.url_base + url
+        while (datetime.now() - self.last_request).seconds < self.rate_limit:
+            # Wait until we're allowed to make another request
+            sleep(max(abs(self.rate_limit - (datetime.now() - self.last_request).seconds), 1))
+        self.last_request = datetime.now()
+        return super().request(method, url, **kwargs)
 
 
 class Beaver(ServiceBase):
     def __init__(self, config=None):
+        # Initialize session with Beaver instance
         super(Beaver, self).__init__(config)
-        self.direct_db = self.config.get('x_api_key', None) is None
-        self._connect_params = {}
-        self.api_url = None
-        self.connection = None
+        self.session = BeaverSessionClient(self.config.get("base_url"), self.config.get("rate_limit"))
+        self.session.headers = self.config.get("headers", {})
+        self.safelist_regex = None
+        self.safelist_match = []
+        # Instantiate safelist(s)
+        try:
+            safelist = self.get_api_interface().get_safelist(
+                [
+                    "network.static.uri",
+                    "network.dynamic.uri",
+                    "network.static.domain",
+                    "network.dynamic.domain",
+                    "network.static.ip",
+                    "network.dynamic.ip",
+                ]
+            )
+            regex_list = []
+
+            # Extend with safelisted matches
+            [self.safelist_match.extend(match_list) for _, match_list in safelist.get("match", {}).items()]
+
+            # Extend with safelisted regex
+            [regex_list.extend(regex_) for _, regex_ in safelist.get("regex", {}).items()]
+
+            self.safelist_regex = re.compile("|".join(regex_list))
+
+        except ServiceAPIError as e:
+            self.log.warning(f"Couldn't retrieve safelist from service server: {e}. Continuing without it..")
 
     def start(self):
-        self._connect_params = {
-            'host': self.config.get('host')
-        }
-        if self.direct_db:
-            self._connect_params.update({
-                'port': int(self.config.get('port')),
-                'db': self.config.get('db'),
-                'user': self.config.get('user'),
-                'passwd': self.config.get('passwd')
-            })
-        else:
-            self._connect_params.update({"x-api-key": self.config.get('x_api_key')})
+        # Check to see if we can actually get a response
+        resp = self.session.get("/statsJson")
+        if not resp.ok:
+            raise Exception(f"Unsuccessful connection to {resp.request.url}: {resp.reason}")
 
-        self.connection = BeaverDatasource(self.log, **self._connect_params)
+    def parse_file_report(self, report: dict, sha256: str) -> ResultSection:
+        result = ResultSection(sha256)
+        malware_report = report.get("malwareReport", {})
 
-    @staticmethod
-    def lookup_callouts(response):
-        results = response.get('callout', None)
+        callout_section = ResultTableSection("Sandbox Call-Outs", heuristic=Heuristic(4))
+        ip_loc = ResultTableSection("IP Location Details", parent=callout_section)
+        av_section = ResultTableSection("Anti-Virus Detections")
+        for reports in malware_report.get("reports", {}).values():
+            for report in reports:
+                if report.get("results"):
+                    # Antivirus Scans
+                    engine_name = report["analysisType"]
+                    for av_name, av_result in report["results"].items():
+                        if av_result.get("result"):
+                            ResultKeyValueSection(
+                                f"{engine_name}: {av_name} identified file as {av_result['result']}",
+                                body=av_result,
+                                parent=av_section,
+                                auto_collapse=True,
+                                heuristic=Heuristic(3),
+                                tags={"av.virus_name": [f"{av_name}.{av_result['result']}"]},
+                            )
 
-        if not results:
-            return None
+        for reports in malware_report.get("dbCNCMap", {}).values():
+            for report in reports:
+                if report.get("callout"):
+                    callout = report["callout"]
+                    path = callout["channel"]
+                    domain = callout["domain"] if callout["domain"] != callout["ip"] else None
+                    if " /" in path:
+                        path = path.split(" ", 2)[1]
+                    callout_section.add_row(
+                        TableRow(
+                            {
+                                "Protocols": [p.upper() for p in callout["protocols"]],
+                                "Host": f"{callout['ip']} ({domain})" if domain else callout["ip"],
+                                "Port": callout["port"],
+                                "Path": path if len(path) < 255 else f"{path[:255]} ...",
+                            }
+                        )
+                    )
+                    if domain:
+                        callout_section.add_tag("network.dynamic.domain", domain)
+                    callout_section.add_tag("network.dynamic.ip", callout["ip"])
+                    callout_section.add_tag("network.port", callout["port"])
 
-        r_section = ResultSection('Sandbox Call-Outs')
-        r_section.set_heuristic(4)
-        analyser = ''
-        r_sub_section = None
-        for result in results[:10]:
-            if analyser != result['analyser']:
-                r_sub_section = ResultSection(f"{result['analyser']} (Analysed on {result['date']})", parent=r_section)
-                analyser = result['analyser']
+                for domain in report.get("domains", []):
+                    ip_loc.add_tag("network.dynamic.ip", domain["ipLocation"]["ip"])
+                    row = TableRow(format_domain_resolution(domain["ipLocation"]))
+                    if row not in ip_loc.section_body._data:
+                        ip_loc.add_row(row)
 
-            channel = result['request']
-            channel = f"({channel.split('~~')[0]})" if channel is not None else ""
-
-            r_sub_section.add_line(f"{result['callout']}:{result['port']}{channel}")
-
-            try:
-                p1, p2, p3, p4 = result['callout'].split(".")
-                if int(p1) <= 255 and int(p2) <= 255 and int(p3) <= 255 and int(p4) <= 255:
-                    r_sub_section.add_tag('network.dynamic.ip', result['callout'])
-            except ValueError:
-                r_sub_section.add_tag('network.dynamic.domain', result['callout'])
-
-            if result['port'] != 0:
-                r_sub_section.add_tag('network.port', str(result['port']))
-
-        if len(results) > 10:
-            r_section.add_line(f"And {len(results) - 10} more...")
-        return r_section
-
-    @staticmethod
-    def lookup_av_hits(response):
-        results = response.get('antivirus', None)
-
-        if not results:
-            return None, []
-
-        r_section = ResultSection('Anti-Virus Detections')
-
-        r_section.add_line(f'Found {len(results)} AV hit(s).')
-        for result in results:
-            r_section.add_subsection(AvHitSection(result['scannerID'], result['name'], ))
-
-        return r_section
-
-    @staticmethod
-    def lookup_source(response):
-        result = response.get('source', None)
-        if not result:
-            return None
-
-        if result['count'] > 0:
-            json_body = dict(
-                first_seen=result['first_seen'],
-                last_seen=result['last_seen'],
-                source_count=result['count'],
-            )
-            r_section = ResultSection('File Frequency', body_format=BODY_FORMAT.KEY_VALUE, body=json.dumps(json_body))
-            return r_section
-
-    @staticmethod
-    def lookup_upatre_downloader(response):
-        result = response.get('upatre', None)
-        if not result:
-            return None
-
-        result = result[0]
-        r_section = ResultSection('Upatre activity')
-        r_section.set_heuristic(1)
-        r_section.add_line(f"The file {result['firstSeen']} decodes to {result['decrypted_md5']} using "
-                           f"XOR key {result['decryption_key']}")
-        return r_section
-
-    @staticmethod
-    def lookup_spam_feed(response):
-        result = response.get('spam_feed', None)
-        if not result:
-            return None
-
-        result = result[0]
-        r_section = ResultSection('SPAM feed')
-        r_section.set_heuristic(2)
-        r_section.add_line(f"Found {result['count']} related spam emails")
-        r_section.add_line(f"\tFirst Seen: {result['first_seen']}")
-        r_section.add_line(f"\tLast Seen: {result['last_seen']}")
-        r_sub_section = ResultSection('Attachments', parent=r_section)
-        r_sub_section.add_line(f"{result['filename']} - md5: {result['filename_md5']}")
-        if result['attachment']:
-            r_sub_section.add_line(f"\t{result['attachment']} - md5: {result['attachment_md5']}")
-        return r_section
-
-    def parse_direct_db(self, response):
-        result = Result()
-
-        res = self.lookup_source(response)
-        if res:
-            # Display source frequency if found
-            result.add_section(res)
-
-            res = self.lookup_upatre_downloader(response)
-            if res:
-                # Display Upatre data
-                result.add_section(res)
-
-            res = self.lookup_callouts(response)
-            if res:
-                # Display Call-Outs
-                result.add_section(res)
-
-            res = self.lookup_spam_feed(response)
-            if res:
-                # Display info from SPAM feed
-                result.add_section(res)
-
-            res = self.lookup_av_hits(response)
-            if res:
-                # Display Anti-virus result
-                result.add_section(res)
-
+        if av_section.subsections:
+            av_section.title_text += f" (x{len(av_section.subsections)})"
+            result.add_subsection(av_section)
+        if callout_section.body:
+            # Format table
+            callout_section.title_text += f" (x{len(callout_section.section_body._data)})"
+            callout_section.section_body._data = sorted(callout_section.section_body._data, key=lambda x: x["Host"])
+            ip_loc.section_body._data = sorted(ip_loc.section_body._data, key=lambda x: x["IP"])
+            result.add_subsection(callout_section)
         return result
 
-    @staticmethod
-    def parse_api(data):
-        result = Result()
+    def parse_domain_ip_report(self, report: dict, subject: str, type: str) -> ResultSection:
+        result = ResultSection(subject)
 
-        # Info block
-        hash_info = data.get('hashinfo', {})
-        if not hash_info:
-            return result
+        # DFS
+        if "DFS" in report["allowedSystems"]:
+            resp = self.session.get(f"/{type}/{subject}/report/fetch/DFS")
+            if resp.ok:
+                dfs_report = resp.json()
+                domain_res = ResultTableSection("Domain Resolution(s)")
+                for r in dfs_report.get("reports", []):
+                    if r["type"] == "PassiveDNS":
+                        for d in r["data"]:
+                            d.pop("sourceName")
+                            d.pop("sourceId")
+                            d["addedOn"] = sorted(d["addedOn"])[-1]
+                            domain_res.add_tag("network.static.ip", d["ip"])
+                            domain_res.add_tag("network.static.domain", d["domain"])
+                            if len(domain_res.section_body._data) <= 10:
+                                domain_res.add_row(TableRow(format_domain_resolution(d)))
+                            else:
+                                pass
 
-        json_body = dict()
-        if 'receivedDate' in data.get('metadata'):
-            json_body.update(dict(
-                received_date=f"{data['metadata']['receivedDate'][:4]}-{data['metadata']['receivedDate'][4:6]}-"
-                              f"{data['metadata']['receivedDate'][6:]}"
-            ))
+                if domain_res.section_body._data:
+                    result.add_subsection(domain_res)
 
-        json_body.update(dict(
-            size=hash_info.get('filesize', ''),
-            md5=hash_info.get('md5', ''),
-            sha1=hash_info.get('sha1', ''),
-            sha256=hash_info.get('sha256', ''),
-            ssdeep_blocksize=hash_info.get('ssdeep_blocksize', ''),
-            ssdeep_hash1=hash_info.get('ssdeep_hash1', ''),
-            ssdeep_hash2=hash_info.get('ssdeep_hash2', ''),
-        ))
+        # MOOSE
+        if "MOOSE" in report["allowedSystems"]:
+            resp = self.session.get(f"/{type}/{subject}/report/fetch/MOOSE")
+            if resp.ok:
+                moose_report = resp.json()
+                families, infra = [], []
+                for r in moose_report.get("reports", []):
+                    if r["type"] == "CTI":
+                        for s in r["summaries"]:
+                            if s["title"] == "Families":
+                                families.extend(s.get("list", []) or [])
+                            elif s["title"] == "Infrastructures":
+                                infra.extend(s.get("list", []) or [])
+                moose_section = ResultKeyValueSection("MOOSE Analysis")
+                if families:
+                    moose_section.set_item("Family", families)
+                    [moose_section.add_tag("attribution.family", f) for f in families]
+                if infra:
+                    moose_section.set_item("Infrastructures", infra)
+                if moose_section.body:
+                    result.add_subsection(moose_section)
+        return result
 
-        ResultSection(title_text='File Info', parent=result, body_format=BODY_FORMAT.KEY_VALUE,
-                      body=json.dumps(json_body))
+    def parse_url_report(self, report: dict, url: str, request: ServiceRequest) -> ResultSection:
+        result = ResultSection(url)
 
-        callouts = data.get('callouts', [])
-        if len(callouts) > 0:
-            max_callouts = 10
-            r_callouts = ResultSection('Sandbox Call-Outs')
-            r_callouts.set_heuristic(4)
-            analyser = ''
-            r_call_sub_section = None
+        # Network Activity / Communications
+        def append_to_communication_table(comm: dict, table: list, depth=0):
+            if comm["entry"]:
+                table.append(
+                    {
+                        "Status Code": comm["entry"]["response"]["statusCode"],
+                        "Request": "↳" * depth
+                        + " "
+                        + f"{comm['entry']['request']['method']} {comm['entry']['request']['url']}",
+                        "MIME Type": comm["entry"]["response"]["content"]["mimeType"].split(";")[0],
+                        "url": comm["entry"]["request"]["url"],
+                    }
+                )
+            for c in comm["children"]:
+                append_to_communication_table(c, table, depth + 1)
 
-            reported_count = 0
-            server = ''
-            for callout in callouts:
-                reported_count += 1
-                if reported_count <= max_callouts:
-                    ip = callout.get('ip', callout.get('hostIp', ''))
-                    if analyser != ip:
-                        title = f"{ip} (Analysed on {callout.get('addedOn', {}).get('data', 'Unknown date')})"
-                        r_call_sub_section = ResultSection(title, parent=r_callouts)
-                        analyser = ip
+        comms_list = []
+        for c in report.get("communications", []):
+            append_to_communication_table(c, comms_list)
 
-                    channel = callout['channel']
-                    channel = f"({channel.split('~~')[0]})" if channel is not None else ""
+        if comms_list:
+            comms_table = ResultTableSection(title_text="Network Activity Upon Visit", parent=result)
+            for c in comms_list:
+                uri = c.pop("url")
+                hostname = urlparse(uri).hostname
+                if re.match(IP_ONLY_REGEX, hostname):
+                    comms_table.add_tag("network.dynamic.ip", hostname)
+                else:
+                    comms_table.add_tag("network.dynamic.domain", hostname)
+                comms_table.add_tag("network.dynamic.uri", uri)
+                comms_table.add_row(TableRow(c))
 
-                    server = callout.get('server', ip)
-                    r_call_sub_section.add_line(f"{server}:{callout['port']}{channel}")
+        # Domain Resolutions
+        if report["report"].get("domainResolutions"):
+            domain_res = ResultTableSection(title_text="Domain Resolution(s)", parent=result)
+            for resolution in report["report"]["domainResolutions"]:
+                ip_location = resolution["ipLocation"]
+                if ip_location.get("domain"):
+                    domain_res.add_tag("network.static.domain", ip_location["domain"])
+                domain_res.add_tag("network.static.ip", ip_location["ip"])
+                domain_res.add_row(TableRow(format_domain_resolution(ip_location)))
 
-                try:
-                    p1, p2, p3, p4 = server.split(".")
-                    if int(p1) <= 255 and int(p2) <= 255 and int(p3) <= 255 and int(p4) <= 255:
-                        r_call_sub_section.add_tag('network.dynamic.ip', server)
-                except ValueError:
-                    r_call_sub_section.add_tag('network.dynamic.domain', server)
-
-                if callout['port'] != 0:
-                    r_call_sub_section.add_tag('network.port', str(callout['port']))
-
-            if len(callouts) > max_callouts:
-                r_callouts.add_line(f"And {len(callouts) - 10} more...")
-            result.add_section(r_callouts)
-
-        av_results = data.get('av', [])
-        if len(av_results) > 0:
-            r_av_sec = ResultSection('Anti-Virus Detections')
-            r_av_sec.add_line(f'Found {len(av_results)} AV hit(s).')
-            for av_result in av_results:
-                r_av_sec.add_subsection(AvHitSection(av_result['scannerID'], av_result['name']))
-            result.add_section(r_av_sec)
-
+        # TODO: Have a way to tell if screenshots contain illicit content before displaying
+        # # Screenshots
+        # if report.get("screenshotLinks"):
+        #     b64_md5_url = b64encode(md5(url.encode()).hexdigest().encode()).decode()
+        #     screenshot_section = ResultImageSection(request, "Screenshots", parent=result)
+        #     for ss_link in report["screenshotLinks"]:
+        #         resp = self.session.get(f"{ss_link}/{b64_md5_url}")
+        #         if resp.ok:
+        #             fh = NamedTemporaryFile("wb", delete=False, dir=self.working_directory)
+        #             fh.write(resp.content)
+        #             fh.close()
+        #             screenshot_section.add_image(fh.name, os.path.basename(ss_link), f"Screenshot from {url}")
         return result
 
     def execute(self, request):
-        try:
-            response = self.connection.query(request.md5)
-        except BeaverDatasource.DatabaseException:
-            raise RecoverableError("Query failed")
-        if self.connection.direct_db:
-            request.result = self.parse_direct_db(response)
-        else:
-            request.result = self.parse_api(response)
+        request.result = Result()
+        resp = self.session.get(f"/sha256/{request.sha256}/json")
+        if resp.ok:
+            # File exists in Beaver, parse response
+            self.log.info(f"Found {request.sha256} in Beaver database")
+            request.result.add_section(self.parse_file_report(resp.json(), request.sha256))
+
+        task_tags = request.task.tags
+        domains = list(set(task_tags.get("network.static.domain", []) + task_tags.get("network.dynamic.domain", [])))
+        urls = list(set(task_tags.get("network.static.uri", []) + task_tags.get("network.dynamic.uri", [])))
+        ips = list(set(task_tags.get("network.static.ip", []) + task_tags.get("network.dynamic.ip", [])))
+
+        if urls:
+            url_section = ResultSection("Extracted URLs from Assemblyline", auto_collapse=True)
+            for url in urls:
+                resp = self.session.get(f"/url/{md5(url.encode()).hexdigest()}/json")
+                if resp.ok:
+                    url_section.add_subsection(self.parse_url_report(resp.json(), url, request))
+            if url_section.subsections:
+                request.result.add_section(url_section)
+
+        if domains:
+            domain_section = ResultSection("Extracted Domains from Assemblyline", auto_collapse=True)
+            for domain in domains:
+                resp = self.session.get(f"/domain/{domain}/json")
+                if resp.ok:
+                    domain_section.add_subsection(self.parse_domain_ip_report(resp.json(), domain, "domain"))
+            if domain_section.subsections:
+                request.result.add_section(domain_section)
+
+        if ips:
+            ip_section = ResultSection("Extracted IPs from Assemblyline", auto_collapse=True)
+            for ip in ips:
+                resp = self.session.get(f"/ip/{ip}/json")
+                if resp.ok:
+                    ip_section.add_subsection(self.parse_domain_ip_report(resp.json(), ip, "ip"))
+            if ip_section.subsections:
+                request.result.add_section(ip_section)
+
+        return
