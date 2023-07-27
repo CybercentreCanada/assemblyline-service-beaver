@@ -203,7 +203,7 @@ class Beaver(ServiceBase):
             if comm["entry"]:
                 table.append(
                     {
-                        "Status Code": comm["entry"]["response"]["statusCode"],
+                        "Status Code": comm["entry"]["response"].get("statusCode", 0),
                         "Request": "↳" * depth
                         + " "
                         + f"{comm['entry']['request']['method']} {comm['entry']['request']['url']}",
