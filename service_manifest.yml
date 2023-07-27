@@ -11,6 +11,8 @@ category: Static Analysis
 privileged: true
 file_required: false
 uses_tags: true
+uses_metadata: true
+
 timeout: 60
 disable_cache: false
 

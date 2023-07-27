@@ -262,9 +262,14 @@ class Beaver(ServiceBase):
             self.log.info(f"Found {request.sha256} in Beaver database")
             request.result.add_section(self.parse_file_report(resp.json(), request.sha256))
 
+        urls = []
+        submitted_url = request.task.metadata.get("submitted_url")
+        if submitted_url and request.task.depth == 0:
+            urls = [submitted_url]
+
         task_tags = request.task.tags
+        urls.extend(list(set(task_tags.get("network.static.uri", []) + task_tags.get("network.dynamic.uri", []))))
         domains = list(set(task_tags.get("network.static.domain", []) + task_tags.get("network.dynamic.domain", [])))
-        urls = list(set(task_tags.get("network.static.uri", []) + task_tags.get("network.dynamic.uri", [])))
         ips = list(set(task_tags.get("network.static.ip", []) + task_tags.get("network.dynamic.ip", [])))
 
         if urls:
